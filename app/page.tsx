@@ -41,7 +41,7 @@ export default function LoginPage() {
     setLoading(true);
     const { data, error: authError } = await supabase.auth.signInWithPassword({ email, password });
     if (authError || !data.user) {
-      setError('Email o contraseña incorrectos');
+      setError(authError?.message || 'Error desconocido');
       setLoading(false);
       return;
     }
