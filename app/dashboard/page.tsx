@@ -3,38 +3,21 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { Embajador, Referido } from '@/lib/types';
+import { Embajador, Referido, EstadoReferido } from '@/lib/types';
 
 function diasParaVencer(cashbackInicio: string): number {
-  const inicio = new Date(cashbackInicio);
-  const vencimiento = new Date(inicio);
+  const vencimiento = new Date(cashbackInicio);
   vencimiento.setDate(vencimiento.getDate() + 365);
-  const hoy = new Date();
-  return Math.ceil((vencimiento.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+  return Math.ceil((vencimiento.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
 }
 
-function MetricCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string | number;
-  color: 'blue' | 'green' | 'gray' | 'indigo';
-}) {
-  const styles = {
-    blue: 'bg-blue-50 text-blue-800',
-    green: 'bg-emerald-50 text-emerald-800',
-    gray: 'bg-gray-100 text-gray-700',
-    indigo: 'bg-indigo-50 text-indigo-800',
-  };
-  return (
-    <div className={`rounded-xl p-5 ${styles[color]}`}>
-      <p className="text-xs font-semibold uppercase tracking-wide opacity-60">{label}</p>
-      <p className="text-3xl font-bold mt-2">{value}</p>
-    </div>
-  );
-}
+const ESTADO_STYLES: Record<EstadoReferido, string> = {
+  'Contactado': 'bg-blue-100 text-blue-700',
+  'En asesoramiento': 'bg-purple-100 text-purple-700',
+  'Cotizado': 'bg-amber-100 text-amber-700',
+  'Confirmado': 'bg-emerald-100 text-emerald-700',
+  'No concretado': 'bg-gray-100 text-gray-500',
+};
 
 export default function Dashboard() {
   const [embajador, setEmbajador] = useState<Embajador | null>(null);
@@ -43,118 +26,137 @@ export default function Dashboard() {
   const router = useRouter();
 
   useEffect(() => {
-    const stored = localStorage.getItem('embajador');
-    if (!stored) {
-      router.push('/');
-      return;
-    }
-    const emb: Embajador = JSON.parse(stored);
-    setEmbajador(emb);
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) { router.replace('/'); return; }
 
-    supabase
-      .from('referidos')
-      .select('*')
-      .eq('embajador_id', emb.id)
-      .order('created_at', { ascending: false })
-      .then(({ data }) => {
-        if (data) setReferidos(data);
-        setLoading(false);
-      });
+      const { data: emb } = await supabase
+        .from('embajadores')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .single();
+
+      if (!emb) { router.replace('/'); return; }
+      if (emb.es_admin) { router.replace('/admin'); return; }
+      setEmbajador(emb);
+
+      const { data: refs } = await supabase
+        .from('referidos')
+        .select('*')
+        .eq('embajador_id', emb.id)
+        .order('created_at', { ascending: false });
+
+      if (refs) setReferidos(refs);
+      setLoading(false);
+    };
+    init();
   }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.replace('/');
+  };
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <p className="text-gray-500 animate-pulse">Cargando...</p>
+        <p className="text-gray-400 animate-pulse text-sm">Cargando...</p>
       </div>
     );
   }
 
-  const activos = referidos.filter((r) => r.estado === 'activo');
-  const cerrados = referidos.filter((r) => r.estado === 'cerrado');
+  const enProceso = referidos.filter(r => !['Confirmado', 'No concretado'].includes(r.estado));
+  const confirmados = referidos.filter(r => r.estado === 'Confirmado');
+  const noConcretados = referidos.filter(r => r.estado === 'No concretado');
 
-  const cashbackValido = cerrados.filter(
-    (r) => r.cashback_inicio && diasParaVencer(r.cashback_inicio) > 0
+  const cashbackVigente = confirmados.filter(
+    r => r.cashback_inicio && diasParaVencer(r.cashback_inicio) > 0
   );
-  const cashbackTotal = cashbackValido.reduce((sum, r) => sum + r.cashback_monto, 0);
-
-  const porVencer = cashbackValido.filter(
-    (r) => r.cashback_inicio && diasParaVencer(r.cashback_inicio) < 90
+  const cashbackTotal = cashbackVigente.reduce((sum, r) => sum + r.cashback_monto, 0);
+  const porVencer = cashbackVigente.filter(
+    r => r.cashback_inicio && diasParaVencer(r.cashback_inicio) < 90
   );
 
   return (
-    <main className="min-h-screen bg-gray-50">
-      <header className="bg-indigo-600 text-white px-6 py-4 shadow">
-        <div className="max-w-4xl mx-auto flex justify-between items-center">
+    <main className="min-h-screen bg-gray-50 pb-8">
+      {/* Header */}
+      <header className="bg-indigo-600 text-white px-4 py-4 shadow-md sticky top-0 z-10">
+        <div className="max-w-lg mx-auto flex justify-between items-center">
           <div>
-            <h1 className="text-lg font-bold">Tablero GLOBA</h1>
-            <p className="text-indigo-200 text-sm">Hola, {embajador?.nombre}</p>
+            <p className="text-xs text-indigo-200 uppercase tracking-widest font-medium">GLOBA</p>
+            <h1 className="font-bold text-lg leading-tight">Hola, {embajador?.nombre}</h1>
           </div>
           <button
-            onClick={() => {
-              localStorage.removeItem('embajador');
-              router.push('/');
-            }}
-            className="text-sm text-indigo-200 hover:text-white transition-colors"
+            onClick={handleLogout}
+            className="text-sm text-indigo-200 hover:text-white active:text-indigo-100 transition-colors py-2 px-3"
           >
             Salir
           </button>
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
-        {/* Metrics */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <MetricCard label="Total referidos" value={referidos.length} color="blue" />
-          <MetricCard label="Activos" value={activos.length} color="green" />
-          <MetricCard label="Cerrados" value={cerrados.length} color="gray" />
-          <MetricCard
-            label="Cashback vigente"
-            value={`$${cashbackTotal.toLocaleString('es-AR')}`}
-            color="indigo"
-          />
+      <div className="max-w-lg mx-auto px-4 py-5 space-y-5">
+        {/* Métricas */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Total</p>
+            <p className="text-4xl font-bold text-gray-800 mt-1">{referidos.length}</p>
+          </div>
+          <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">En proceso</p>
+            <p className="text-4xl font-bold text-violet-600 mt-1">{enProceso.length}</p>
+          </div>
+          <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+            <p className="text-xs text-gray-400 uppercase tracking-wide font-medium">Confirmados</p>
+            <p className="text-4xl font-bold text-emerald-600 mt-1">{confirmados.length}</p>
+          </div>
+          <div className="bg-indigo-600 rounded-2xl p-4 shadow-sm">
+            <p className="text-xs text-indigo-200 uppercase tracking-wide font-medium">Cashback vigente</p>
+            <p className="text-2xl font-bold text-white mt-1 leading-tight">
+              ${cashbackTotal.toLocaleString('es-AR')}
+            </p>
+          </div>
         </div>
 
-        {/* Cashback alert */}
+        {/* Alerta vencimiento */}
         {porVencer.length > 0 && (
-          <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
-            <p className="font-semibold text-amber-800 mb-2">Cashback por vencer (menos de 90 dias)</p>
-            <div className="space-y-1">
-              {porVencer.map((r) => (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+            <p className="font-semibold text-amber-800 text-sm mb-2">Cashback por vencer (menos de 90 días)</p>
+            <div className="space-y-1.5">
+              {porVencer.map(r => (
                 <div key={r.id} className="flex justify-between text-sm text-amber-700">
                   <span>{r.nombre_referido}</span>
-                  <span>
-                    ${r.cashback_monto.toLocaleString('es-AR')} — vence en{' '}
-                    <strong>{diasParaVencer(r.cashback_inicio!)} dias</strong>
-                  </span>
+                  <span className="font-bold">{diasParaVencer(r.cashback_inicio!)} días</span>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Active referrals */}
+        {/* Referidos activos */}
         <section>
-          <h2 className="text-base font-bold text-gray-800 mb-3">Referidos Activos</h2>
-          {activos.length === 0 ? (
-            <div className="bg-white rounded-xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">
+            Referidos activos ({enProceso.length})
+          </h2>
+          {enProceso.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
               Sin referidos activos
             </div>
           ) : (
             <div className="space-y-2">
-              {activos.map((r) => (
+              {enProceso.map(r => (
                 <div
                   key={r.id}
-                  className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-4 flex justify-between items-center"
+                  className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4 flex justify-between items-center gap-3"
                 >
-                  <div>
-                    <p className="font-semibold text-gray-800">{r.nombre_referido}</p>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      Desde {new Date(r.created_at).toLocaleDateString('es-AR')}
-                    </p>
+                  <div className="min-w-0">
+                    <p className="font-semibold text-gray-800 truncate">{r.nombre_referido}</p>
+                    {r.destino && (
+                      <p className="text-xs text-gray-400 mt-0.5">{r.destino}</p>
+                    )}
                   </div>
-                  <span className="bg-emerald-100 text-emerald-700 text-xs font-semibold px-3 py-1 rounded-full">
-                    Activo
+                  <span className={`text-xs font-semibold px-3 py-1.5 rounded-full whitespace-nowrap flex-shrink-0 ${ESTADO_STYLES[r.estado]}`}>
+                    {r.estado}
                   </span>
                 </div>
               ))}
@@ -162,53 +164,63 @@ export default function Dashboard() {
           )}
         </section>
 
-        {/* Closed referrals history */}
+        {/* Cuenta corriente cashback */}
         <section>
-          <h2 className="text-base font-bold text-gray-800 mb-3">Historial de Referidos Cerrados</h2>
-          {cerrados.length === 0 ? (
-            <div className="bg-white rounded-xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
-              Sin referidos cerrados
+          <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">
+            Cuenta corriente cashback
+          </h2>
+          {confirmados.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-gray-100 p-6 text-center text-gray-400 text-sm">
+              Sin cashback acumulado aún
             </div>
           ) : (
             <div className="space-y-2">
-              {cerrados.map((r) => {
+              {confirmados.map(r => {
                 const dias = r.cashback_inicio ? diasParaVencer(r.cashback_inicio) : null;
                 const expirado = dias !== null && dias <= 0;
+                const vencDate = r.cashback_inicio
+                  ? new Date(
+                      new Date(r.cashback_inicio).getTime() + 365 * 86400000
+                    ).toLocaleDateString('es-AR')
+                  : '-';
                 return (
-                  <div
-                    key={r.id}
-                    className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-4 flex justify-between items-center"
-                  >
-                    <div>
-                      <p className="font-semibold text-gray-800">{r.nombre_referido}</p>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        Cerrado:{' '}
-                        {r.fecha_cierre
-                          ? new Date(r.fecha_cierre).toLocaleDateString('es-AR')
-                          : '-'}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p
-                        className={`font-bold text-sm ${
-                          expirado ? 'text-gray-400 line-through' : 'text-indigo-600'
-                        }`}
-                      >
-                        ${r.cashback_monto.toLocaleString('es-AR')}
-                      </p>
-                      {dias !== null && (
+                  <div key={r.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm px-4 py-4">
+                    <div className="flex justify-between items-start gap-3">
+                      <div className="min-w-0">
+                        <p className="font-semibold text-gray-800 truncate">{r.nombre_referido}</p>
+                        {r.destino && <p className="text-xs text-gray-400 mt-0.5">{r.destino}</p>}
+                        <div className="text-xs text-gray-400 mt-2 space-y-0.5">
+                          <p>
+                            Inicio:{' '}
+                            {r.cashback_inicio
+                              ? new Date(r.cashback_inicio).toLocaleDateString('es-AR')
+                              : '-'}
+                          </p>
+                          <p>Vence: {vencDate}</p>
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
                         <p
-                          className={`text-xs mt-0.5 ${
-                            expirado
-                              ? 'text-red-400'
-                              : dias < 90
-                              ? 'text-amber-500 font-semibold'
-                              : 'text-gray-400'
+                          className={`font-bold text-xl ${
+                            expirado ? 'text-gray-300 line-through' : 'text-indigo-600'
                           }`}
                         >
-                          {expirado ? 'Cashback vencido' : `Vence en ${dias} dias`}
+                          ${r.cashback_monto.toLocaleString('es-AR')}
                         </p>
-                      )}
+                        {dias !== null && (
+                          <p
+                            className={`text-xs mt-1 font-medium ${
+                              expirado
+                                ? 'text-red-400'
+                                : dias < 90
+                                ? 'text-amber-500'
+                                : 'text-gray-400'
+                            }`}
+                          >
+                            {expirado ? 'Vencido' : `${dias} días`}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -216,6 +228,31 @@ export default function Dashboard() {
             </div>
           )}
         </section>
+
+        {/* Historial */}
+        {noConcretados.length > 0 && (
+          <section>
+            <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">
+              No concretados ({noConcretados.length})
+            </h2>
+            <div className="space-y-2">
+              {noConcretados.map(r => (
+                <div
+                  key={r.id}
+                  className="bg-white rounded-2xl border border-gray-100 px-4 py-3 flex justify-between items-center opacity-60 gap-3"
+                >
+                  <div className="min-w-0">
+                    <p className="font-medium text-gray-700 truncate">{r.nombre_referido}</p>
+                    {r.destino && <p className="text-xs text-gray-400">{r.destino}</p>}
+                  </div>
+                  <span className="text-xs font-semibold px-3 py-1 rounded-full bg-gray-100 text-gray-500 flex-shrink-0">
+                    No concretado
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
     </main>
   );
