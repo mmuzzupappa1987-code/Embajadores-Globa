@@ -13,13 +13,23 @@ export default function LoginPage() {
   const router = useRouter();
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (session) {
-        await redirectUser(session.user.id);
-      } else {
+    const timeout = setTimeout(() => setChecking(false), 4000);
+
+    supabase.auth.getSession()
+      .then(async ({ data: { session } }) => {
+        clearTimeout(timeout);
+        if (session) {
+          await redirectUser(session.user.id);
+        } else {
+          setChecking(false);
+        }
+      })
+      .catch(() => {
+        clearTimeout(timeout);
         setChecking(false);
-      }
-    });
+      });
+
+    return () => clearTimeout(timeout);
   }, []);
 
   const redirectUser = async (userId: string) => {
